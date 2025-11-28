@@ -1,0 +1,161 @@
+name: Android Build & Publish
+
+on:
+  push:
+    tags:
+      - "v*.*.*"        # Stable
+      - "v*.*.*-*"      # Pre-releases (alpha, beta, rc)
+
+jobs:
+  build-and-release:
+    name: Build & Release Android
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required for creating the release
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ----------------------------------------------------------------
+      # 1. VERSIONING & VALIDATION
+      # ----------------------------------------------------------------
+      - name: Validate version tag and set metadata
+        id: version_info
+        run: |
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          echo "Detected tag: $TAG_NAME"
+
+          # Regex for valid versions
+          REGEX="^v[0-9]+\.[0-9]+\.[0-9]+(-alpha[0-9]+)?(-beta[0-9]+)?(-rc[0-9]+)?$"
+
+          if [[ "$TAG_NAME" =~ $REGEX ]]; then
+            # Determine Group (Stable vs Pre-release)
+            if [[ "$TAG_NAME" =~ alpha ]]; then
+              echo "is_prerelease=true" >> $GITHUB_OUTPUT
+              echo "group=alpha" >> $GITHUB_OUTPUT
+            elif [[ "$TAG_NAME" =~ beta ]]; then
+              echo "is_prerelease=true" >> $GITHUB_OUTPUT
+              echo "group=beta" >> $GITHUB_OUTPUT
+            elif [[ "$TAG_NAME" =~ rc ]]; then
+              echo "is_prerelease=true" >> $GITHUB_OUTPUT
+              echo "group=rc" >> $GITHUB_OUTPUT
+            else
+              echo "is_prerelease=false" >> $GITHUB_OUTPUT
+              echo "group=stable" >> $GITHUB_OUTPUT
+            fi
+            
+            # Extract clean version number (remove 'v')
+            VERSION="${TAG_NAME#v}"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Invalid tag format!"
+            echo "Valid formats:"
+            echo "  vX.X.X"
+            echo "  vX.X.X-alphaN"
+            echo "  vX.X.X-betaN"
+            echo "  vX.X.X-rcN"
+            echo "  vX.X.X-alphaN-rcN"
+            echo "  vX.X.X-betaN-rcN"
+            exit 1
+          fi
+
+      - name: Extract App Name from pubspec.yaml
+        id: app_metadata
+        run: |
+          APP_NAME=$(grep '^name:' pubspec.yaml | cut -d ' ' -f 2)
+          echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
+
+      # ----------------------------------------------------------------
+      # 2. SETUP & BUILD
+      # ----------------------------------------------------------------
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.29.0'
+          cache: true
+          
+      - name: Install dependencies
+        run: flutter pub get
+
+      # Using split-per-abi to keep GitHub Release artifact sizes optimized
+      - name: Build Android APK (Split ABI)
+        run: flutter build apk --release --split-per-abi
+
+      # ----------------------------------------------------------------
+      # 3. PREPARE ARTIFACTS
+      # ----------------------------------------------------------------
+      - name: Rename APKs
+        id: rename_artifacts
+        run: |
+          VERSION="${{ steps.version_info.outputs.version }}"
+          NAME="${{ env.APP_NAME }}"
+          
+          # Create a directory for artifacts to keep things clean
+          mkdir -p release-artifacts
+          
+          # Rename and move the files
+          mv build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk release-artifacts/${NAME}-v${VERSION}-armeabi-v7a.apk
+          mv build/app/outputs/flutter-apk/app-arm64-v8a-release.apk release-artifacts/${NAME}-v${VERSION}-arm64-v8a.apk
+          mv build/app/outputs/flutter-apk/app-x86_64-release.apk release-artifacts/${NAME}-v${VERSION}-x86_64.apk
+          
+          # List them for verification
+          ls -la release-artifacts/
+
+      - name: Extract Release Notes
+        id: extract_notes
+        run: |
+          VERSION="${{ steps.version_info.outputs.version }}"
+          FILE="CHANGELOG.md"
+          
+          if [ ! -f "$FILE" ]; then
+             echo "CHANGELOG.md not found, checking CHANGES.md"
+             FILE="CHANGES.md"
+          fi
+
+          if [ -f "$FILE" ]; then
+            # Extracts text between the current version header and the next version header
+            # Assumes format: ## X.X.X
+            sed -n "/^## ${VERSION}/,/^## /p" $FILE | sed '$d' | sed '/^##$/d' > release_notes.txt
+          fi
+
+          # Fallback if extraction failed or file empty
+          if [ ! -s release_notes.txt ]; then
+            echo "Release notes for version ${VERSION}" > release_notes.txt
+          fi
+          
+          echo "notes_path=release_notes.txt" >> $GITHUB_OUTPUT
+
+      # To use this:
+      # 1. You ideally need a Universal APK for Firebase (Split APKs are tricky with Firebase).
+      #    You might want to add 'flutter build apk --release' (no split) before this step if enabling.
+      # 2. Uncomment the block below.
+      
+      # - name: Upload to Firebase App Distribution
+      #   uses: wzieba/Firebase-Distribution-Github-Action@v1
+      #   with:
+      #     appId: ${{ secrets.FIREBASE_APP_ID }}
+      #     serviceCredentialsFileContent: ${{ secrets.CREDENTIAL_FILE_CONTENT }}
+      #     groups: ${{ steps.version_info.outputs.group }}
+      #     # Note: Using the ARM64 build as the default for Firebase if using split-abi, 
+      #     # or change this to point to a universal APK if you build one.
+      #     file: release-artifacts/${{ env.APP_NAME }}-v${{ steps.version_info.outputs.version }}-arm64-v8a.apk
+      #     releaseNotesFile: ${{ steps.extract_notes.outputs.notes_path }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release v${{ steps.version_info.outputs.version }}
+          body_path: ${{ steps.extract_notes.outputs.notes_path }}
+          draft: false
+          # Dynamically set prerelease based on tag (alpha/beta/rc)
+          prerelease: ${{ steps.version_info.outputs.is_prerelease }}
+          files: |
+            release-artifacts/*.apk
