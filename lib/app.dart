@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:provider/single_child_widget.dart';
 
-import 'config/dependencies.dart';
+import 'di/dependencies.dart';
 import 'data/repositories/auth/auth_repository.dart';
 import 'routing/router.dart';
 import 'ui/core/localization/app_localizations.dart';

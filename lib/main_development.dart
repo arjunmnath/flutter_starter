@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'app.dart';
-import 'config/dependencies.dart';
+import 'di/dependencies.dart';
 
 /// Development config entry point.
 /// Launch with `flutter run --target lib/main_development.dart`.
