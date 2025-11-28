@@ -17,9 +17,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ----------------------------------------------------------------
-      # 1. VERSIONING & VALIDATION
-      # ----------------------------------------------------------------
       - name: Validate version tag and set metadata
         id: version_info
         run: |
@@ -66,9 +63,6 @@ jobs:
           APP_NAME=$(grep '^name:' pubspec.yaml | cut -d ' ' -f 2)
           echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
 
-      # ----------------------------------------------------------------
-      # 2. SETUP & BUILD
-      # ----------------------------------------------------------------
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
@@ -79,7 +73,6 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: '3.29.0'
           cache: true
           
       - name: Install dependencies
@@ -89,9 +82,6 @@ jobs:
       - name: Build Android APK (Split ABI)
         run: flutter build apk --release --split-per-abi
 
-      # ----------------------------------------------------------------
-      # 3. PREPARE ARTIFACTS
-      # ----------------------------------------------------------------
       - name: Rename APKs
         id: rename_artifacts
         run: |
